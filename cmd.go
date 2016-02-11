@@ -4,7 +4,6 @@ import (
 	"flag"
 	"fmt"
 	"go/build"
-	"io/ioutil"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,22 +11,26 @@ import (
 )
 
 var outputTemplate = template.Must(template.New("script").Parse(
-	`{{$gopath := .Tmp}}{{$cwd := .Cwd}}# Automatically abort on error
+	`{{$cwd := .Cwd}}# Automatically abort on error
 set -e
+
+# Create temporary directory to simulate empty GOPATH. 'go get' will download
+# the dependencies into this path where we later copy them from.
+tmpDir="$(mktemp --directory)"
 
 # Remove currently installed vendored dependencies
 rm -rf {{.Cwd}}/vendor/*
 
 # Setup environment for 'go get'
 export GO15VENDOREXPERIMENT=0
-export GOPATH={{$gopath}}
+export GOPATH=$tmpDir
 
 # Setup link from temporary GOPATH to the current package
-mkdir -p {{$gopath}}/src/{{.Package}}
-rm -r {{$gopath}}/src/{{.Package}}
-ln -s {{$cwd}} {{$gopath}}/src/{{.Package}}
+mkdir -p $GOPATH/src/{{.Package}}
+rm -r $GOPATH/src/{{.Package}}
+ln -s {{$cwd}} $GOPATH/src/{{.Package}}
 
-cd {{$gopath}}/src/{{.Package}}
+cd $GOPATH/src/{{.Package}}
 
 # Download depenencies into temporary directory
 installedPackagesStr=""
@@ -35,10 +38,10 @@ installedPackagesStr=""
 installedPackagesStr+=$'\n'
 {{end}}
 # Remove symlink
-rm -rf {{$gopath}}/src/{{.Package}}
+rm -rf $GOPATH/src/{{.Package}}
 
 # Move vendored depenencies from temporary storage into current project
-rsync -r {{.Tmp}}/src/ {{.Cwd}}/vendor
+rsync -r $tmpDir/src/ {{.Cwd}}/vendor
 
 {{if .AddSubmodules}}# Set currently used working directory
 cwd="{{.Cwd}}/"
@@ -81,12 +84,11 @@ done
 {{else}}# Adding submodules disabled
 {{end}}
 # Remove temporary package installation directory
-rm -rf {{.Tmp}}
+rm -rf $tmpDir
 `))
 
 type templateInput struct {
 	Cwd           string
-	Tmp           string
 	Packages      []string
 	AddSubmodules bool
 	Package       string
@@ -162,14 +164,8 @@ func main() {
 	cwd, err := os.Getwd()
 	handleErr(err)
 
-	// Create temporary directory to simulate empty GOPATH. `go get` will download
-	// the dependencies into this path where we later copy them from.
-	tmp, err := ioutil.TempDir("", "cedric-gopath-")
-	handleErr(err)
-
 	outputTemplate.Execute(os.Stdout, templateInput{
 		Cwd:           cwd,
-		Tmp:           tmp,
 		Packages:      externalImports,
 		AddSubmodules: addSubmodules,
 		Package:       pkgImportPath,
